@@ -1,0 +1,33 @@
+{
+  "name": "node-jipe",
+  "version": "1.0.0",
+  "description": "Process composition via JSON-RPC pipes",
+  "main": "out/public.js",
+  "types": "out/public.d.ts",
+  "repository": {
+    "url": "https://github.com/hoehrmann/node-jipe",
+    "type": "git"
+  },
+  "author": "Bjoern Hoehrmann",
+  "license": "MIT",
+
+  "bin": {
+    "jipe": "out/jipe.js"
+  },
+
+  "dependencies": {
+    "command-line-args": "^5.1.1",
+    "split2": "^3.1.1",
+    "through2": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/command-line-args": "^5.0.0",
+    "@types/node": "^11.13.4",
+    "@types/split2": "^2.1.6",
+    "@types/through2": "^2.0.34",
+    "jsdoc": "^3.5.5",
+    "tap": "^12.6.1",
+    "typedoc": "^0.14.2",
+    "typescript": "^3.4.3"
+  }
+}
