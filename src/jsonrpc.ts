@@ -1,7 +1,7 @@
 
 export type JsonrpcResult = { [key: string]: any; };
 
-export type JsonrpcParams = { [key: string]: any; };
+export type JsonrpcParams = { [key: string]: any; } | null;
 
 export type JsonrpcIdentifier = number;
 
@@ -14,7 +14,7 @@ export type JsonrpcMessage = (
 );
 
 export type JsonrpcMessageType = (
-  'failure' | 'result' | 'notification' | 'request' | 'malformed' 
+  'failure' | 'result' | 'request' | 'malformed' 
 );
 
 export interface JsonrpcError {

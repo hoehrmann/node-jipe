@@ -3,3 +3,5 @@ export {
 } from './channel';
 
 export * from './jsonrpc';
+
+export import api = require('./api')

@@ -1,6 +1,6 @@
 {
   "name": "node-jipe",
-  "version": "1.0.0",
+  "version": "1.0.42",
   "description": "Process composition via JSON-RPC pipes",
   "main": "out/public.js",
   "types": "out/public.d.ts",
@@ -10,11 +10,9 @@
   },
   "author": "Bjoern Hoehrmann",
   "license": "MIT",
-
   "bin": {
     "jipe": "out/jipe.js"
   },
-
   "dependencies": {
     "command-line-args": "^5.1.1",
     "split2": "^3.1.1",

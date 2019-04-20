@@ -13,7 +13,6 @@
       "es2015.collection",
       "es2015.core",
       "es2017.object",
-      "dom"
     ]
   },
   "typedocOptions": {
@@ -22,13 +21,10 @@
     "mode": "file",
     "out": "docs",
     "theme": "minimal",
-    // "exclude": "test",
-
+    "exclude": "src/test",
     "excludePrivate": true,
-//    "excludeProtected": true,
     "excludeNotExported": true,
     "excludeExternals": true,
-
     "externalPattern": "node_modules",
     "stripInternal": true
   }

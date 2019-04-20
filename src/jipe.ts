@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Channel } from './public';
+import { Channel, JsonrpcStdErrors } from './public';
 import commandLineArgs = require('command-line-args');
 import { spawn, ChildProcess } from 'child_process';
 import { stackBy } from './stackBy';
@@ -45,7 +45,9 @@ class Mediator {
       let channel: Channel;
 
       if (child.stdout && child.stdin) {
-        channel = new Channel(child.stdout, child.stdin);
+        channel = new Channel(child.stdout, child.stdin, {
+          foo: true,
+        });
       } else {
         throw `Child ${ix} (${exec} ${args}) has no stdio`;
       }
@@ -62,7 +64,7 @@ class Mediator {
 
     children.forEach(child => {
       child.channel.on('message', (...args) => {
-        console.error(args);
+        // console.error(args);
       })
     });
 
@@ -80,17 +82,21 @@ class Mediator {
             }
           }
 
+/*
           if (/^notification\./.test(name)) {
             // Broadcast
             const old = dispatch.get(name) || [];
             dispatch.set(name, [...old, children[ix]]);
           }
+*/
+
         });
 
       });
 
       children.forEach((child, ix) => {
 
+/*
         child.channel.on('notification', msg => {
           const list = dispatch.get(msg.request.method) || [];
           list.forEach(subscriber => {
@@ -100,12 +106,11 @@ class Mediator {
             );
           })
         });
+*/
 
         child.channel.on('request', async msg => {
 
-          console.error('got a request', msg);
           const name = `request.${msg.request.method}`;
-          console.error(name);
           const handler = dispatch.get(name);
 
           if (handler) {
@@ -114,17 +119,31 @@ class Mediator {
               msg.request.method,
               msg.request.params,
               result => {
-                child.channel.sendResult(msg.request, result);
+                if (msg.respond) {
+                  child.channel.sendResult(msg.request, result);
+                }
               },
               error => {
-                child.channel.sendError(
-                  msg.request,
-                  error.code,
-                  error.message,
-                  error.data
-                );
+                if (msg.respond) {
+                  child.channel.sendError(
+                    msg.request,
+                    error.code,
+                    error.message,
+                    error.data
+                  );
+                }
               }
             );
+
+          } else {
+
+            if (msg.respond) {
+              child.channel.sendError(
+                msg.request,
+                -32601,
+                `Method ${msg.request.method} not found`,
+              );
+            }
 
           }
 

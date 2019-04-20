@@ -4,6 +4,7 @@ import through2 = require('through2');
 import { EventEmitter } from 'events';
 import * as rpc from './jsonrpc'
 import { fail } from 'assert';
+import { api } from './public';
 
 /**
  * Internal interface to represent pending requests on a channel.
@@ -18,8 +19,8 @@ interface RequestAndCallback {
  * Given a JSON-RPC 2.0 message object, this determines the type of
  * the message object based on the properties of the message object.
  * Responses are subdivided into `failure` and `result` types, and
- * if a message does not conform to `request` or `notification`, the
- * function returns `malformed`.
+ * if a message does not conform to `request`, the function returns
+ * `malformed`.
  * 
  * @param message Object to check for relevant properties.
  * @returns Message type as a string.
@@ -33,10 +34,6 @@ function getMessageType(message: any): rpc.JsonrpcMessageType {
 
   if (!has('jsonrpc')) {
     return 'malformed';
-  }
-
-  if (!has('id')) {
-    return 'notification';
   }
 
   if (has('method')) {
@@ -55,28 +52,38 @@ function getMessageType(message: any): rpc.JsonrpcMessageType {
 
 }
 
+export interface ChannelOptions {
+  foo?: Boolean;
+};
+
 /**
  * Channel.
  * 
  */
 export class Channel extends EventEmitter {
 
-  /** Readable object stream of decoded JSON-RPC messages. */
-  protected pipedRead: Transform;
-
   /** Writable object stream for JSON-RPC messages. */
   protected pipedWrite: Transform;
 
-  protected pending = new Map<number, RequestAndCallback>();
+  protected others: Transform;
+
+  protected awaiting = new Map<number, RequestAndCallback>();
+  protected processing = new Set<number>();
+
+  /** Configuration */
+  protected options: ChannelOptions;
 
   /**
    * Construct a new channel from a pair of streams.
    * 
    * @param read Readable stream on which messages are received.
    * @param write Writable stream on which messages are sent.
+   * @param options ...
    */
-  constructor(read: Readable, write: Writable) {
+  constructor(read: Readable, write: Writable, options: ChannelOptions = {}) {
     super();
+
+    this.options = options;
 
     const dissect = (data: string) => {
       const parsed = JSON.parse(data);
@@ -88,12 +95,34 @@ export class Channel extends EventEmitter {
       cb(null, JSON.stringify(chunk) + '\n');
     };
 
-    this.pipedWrite = through2.obj(encode);
+    const encoder = through2({ objectMode: true }, encode)
+
+    this.pipedWrite = encoder;
+
     this.pipedWrite.pipe(write);
 
-    this.pipedRead = read.pipe(split2(dissect));
+    const dissected = read.pipe(split2(dissect));
+    const responses = through2({ objectMode: true });
+    const others = through2({ objectMode: true });
 
-    this.pipedRead.on('data', ([type, obj]) => {
+    this.others = others;
+
+    const demux = function(chunk, encoding, cb) {
+      const [ type, message ] = chunk;
+
+      if (type === 'result' || type === 'failure') {
+        responses.push(chunk);
+        responses.resume(); // drain
+      } else {
+        others.push(chunk);
+      }
+
+      cb();
+    };
+
+    dissected.pipe(through2({ objectMode: true }, demux));
+
+    const handler = ([type, obj]) => {
 
       const message: rpc.JsonrpcMessage = obj;
 
@@ -102,11 +131,11 @@ export class Channel extends EventEmitter {
       if (type === 'result' || type === 'failure') {
         
         const response = message as rpc.JsonrpcResponse;
-        const rcb = this.pending.get(response.id);
+        const rcb = this.awaiting.get(response.id);
 
         if (rcb) {
 
-          this.pending.delete(rcb.request.id);
+          this.awaiting.delete(rcb.request.id);
 
           request = rcb.request;
 
@@ -128,17 +157,25 @@ export class Channel extends EventEmitter {
 
         }
 
+      } else {
+
+        this.processing.add(request.id);
+        this.others.pause();
+
       }
 
       for (const event of this.getEventSequence(type, request)) {
         this.emit(event, {
           type: type,
+          respond: Object.prototype.hasOwnProperty.call(request, 'id'),
           message: message,
           request: request
         });
       }
+    };
 
-    });
+    responses.on('data', handler);
+    others.on('data', handler);
 
   }
 
@@ -147,7 +184,6 @@ export class Channel extends EventEmitter {
     'result': ['message', 'response.', 'result.'],
     'failure': ['message', 'response.', 'failure.'],
     'request': ['message', 'request.'],
-    'notification': ['message', 'notification.'],
     'malformed': ['malformed.'],
   };
 
@@ -198,15 +234,17 @@ export class Channel extends EventEmitter {
    * @param params Parameters of the notification.
    * @returns Promise that resolves when the message was sent.
    */
-  public sendNotification(
-    method: string,
+  public sendNotification<T extends api.Definition>(
+    method: { new(): T },
     params: rpc.JsonrpcParams,
   ): Promise<any> {
+
+    const created = new method;
 
     return this.sendMessage({
       jsonrpc: '2.0',
       params: params,
-      method: method
+      method: created.method,
     });
     
   }
@@ -220,23 +258,25 @@ export class Channel extends EventEmitter {
    * @param errorCb Callback for error response.
    * @returns Promise that resolves when the request was sent.
    */
-  public sendRequest(
-    method: string,
+  public sendRequest<T extends api.Definition>(
+    method: { new(): T },
     params: rpc.JsonrpcParams,
     resultCb: (result: rpc.JsonrpcResult) => void,
     errorCb: (error: rpc.JsonrpcError) => void,
   ): Promise<rpc.JsonrpcRequest> {
 
+    const created = new method;
+
     const request: rpc.JsonrpcRequest = {
       jsonrpc: '2.0',
       id: this.next_id++,
-      method: method,
+      method: created.method,
       params: params,
     };
 
     return this.sendMessage(request).then(sent => {
 
-      this.pending.set(request.id, {
+      this.awaiting.set(request.id, {
         request: request,
         resolve: resultCb,
         reject: errorCb,
@@ -253,15 +293,15 @@ export class Channel extends EventEmitter {
    * Promise for the result and rejects with an error response if 
    * any. Uses [[Channel.sendRequest]] internally.
    * 
-   * @param method Name of the requested procedure.
+   * @param method Meta class of the requested procedure.
    * @param params Parameters for the procedure.
    * @returns Promise that resolves with the response and rejects
    *          with error response
    */
-  public async requestResult(
-    method: string,
-    params: rpc.JsonrpcParams
-  ): Promise<any> {
+  public async requestResult<T extends api.Definition>(
+    method: new() => T,
+    params: api.Params<T>
+  ): api.Promised<T> {
 
     return new Promise((resolve, reject) => {
       this.sendRequest(method, params, resolve, reject);
@@ -285,7 +325,11 @@ export class Channel extends EventEmitter {
     data?: any
   ): Promise<any> {
 
-    this.pipedRead.resume();
+    this.processing.delete(request.id);
+
+    if (this.processing.size === 0) {
+      this.others.resume();
+    }
 
     return this.sendMessage({
       jsonrpc: '2.0',
@@ -311,7 +355,11 @@ export class Channel extends EventEmitter {
     result: any
   ): Promise<any> {
 
-    this.pipedRead.resume();
+    this.processing.delete(request.id);
+
+    if (this.processing.size === 0) {
+      this.others.resume();
+    }
 
     return this.sendMessage({
       jsonrpc: '2.0',
