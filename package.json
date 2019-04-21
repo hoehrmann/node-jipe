@@ -1,6 +1,6 @@
 {
   "name": "node-jipe",
-  "version": "1.0.42",
+  "version": "1.0.71",
   "description": "Process composition via JSON-RPC pipes",
   "main": "out/public.js",
   "types": "out/public.d.ts",
@@ -12,6 +12,15 @@
   "license": "MIT",
   "bin": {
     "jipe": "out/jipe.js"
+  },
+  "prettier": {
+    "arrowParens": "always",
+    "printWidth": 70,
+    "singleQuote": true,
+    "quoteProps": "consistent",
+    "parser": "typescript",
+    "endOfLine": "lf",
+    "trailingComma": "es5"
   },
   "dependencies": {
     "command-line-args": "^5.1.1",

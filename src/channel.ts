@@ -2,7 +2,7 @@ import { Readable, Writable, Transform } from 'stream';
 import split2 = require('split2');
 import through2 = require('through2');
 import { EventEmitter } from 'events';
-import * as rpc from './jsonrpc'
+import * as rpc from './jsonrpc';
 import { fail } from 'assert';
 import { api } from './public';
 
@@ -21,16 +21,13 @@ interface RequestAndCallback {
  * Responses are subdivided into `failure` and `result` types, and
  * if a message does not conform to `request`, the function returns
  * `malformed`.
- * 
+ *
  * @param message Object to check for relevant properties.
  * @returns Message type as a string.
  */
 function getMessageType(message: any): rpc.JsonrpcMessageType {
-
-  const has = (name) => Object.prototype.hasOwnProperty.call(
-    message,
-    name
-  );
+  const has = (name) =>
+    Object.prototype.hasOwnProperty.call(message, name);
 
   if (!has('jsonrpc')) {
     return 'malformed';
@@ -49,19 +46,24 @@ function getMessageType(message: any): rpc.JsonrpcMessageType {
   }
 
   return 'malformed';
-
 }
 
 export interface ChannelOptions {
   foo?: Boolean;
-};
+}
+
+export interface Message {
+  type: rpc.JsonrpcMessageType;
+  request: rpc.JsonrpcRequest;
+  message: rpc.JsonrpcMessage;
+  respond: Boolean;
+}
 
 /**
  * Channel.
- * 
+ *
  */
 export class Channel extends EventEmitter {
-
   /** Writable object stream for JSON-RPC messages. */
   protected pipedWrite: Transform;
 
@@ -75,12 +77,16 @@ export class Channel extends EventEmitter {
 
   /**
    * Construct a new channel from a pair of streams.
-   * 
+   *
    * @param read Readable stream on which messages are received.
    * @param write Writable stream on which messages are sent.
    * @param options ...
    */
-  constructor(read: Readable, write: Writable, options: ChannelOptions = {}) {
+  constructor(
+    read: Readable,
+    write: Writable,
+    options: ChannelOptions = {}
+  ) {
     super();
 
     this.options = options;
@@ -95,7 +101,7 @@ export class Channel extends EventEmitter {
       cb(null, JSON.stringify(chunk) + '\n');
     };
 
-    const encoder = through2({ objectMode: true }, encode)
+    const encoder = through2({ objectMode: true }, encode);
 
     this.pipedWrite = encoder;
 
@@ -108,7 +114,7 @@ export class Channel extends EventEmitter {
     this.others = others;
 
     const demux = function(chunk, encoding, cb) {
-      const [ type, message ] = chunk;
+      const [type, message] = chunk;
 
       if (type === 'result' || type === 'failure') {
         responses.push(chunk);
@@ -123,18 +129,15 @@ export class Channel extends EventEmitter {
     dissected.pipe(through2({ objectMode: true }, demux));
 
     const handler = ([type, obj]) => {
-
       const message: rpc.JsonrpcMessage = obj;
 
       let request: any = message;
 
       if (type === 'result' || type === 'failure') {
-        
         const response = message as rpc.JsonrpcResponse;
         const rcb = this.awaiting.get(response.id);
 
         if (rcb) {
-
           this.awaiting.delete(rcb.request.id);
 
           request = rcb.request;
@@ -146,45 +149,43 @@ export class Channel extends EventEmitter {
             const result = response as rpc.JsonrpcResponseResult;
             rcb.resolve(result.result);
           }
-
         } else {
-
           fail(
             `Response for unknown request: ${
               process.argv
             }: ${JSON.stringify(obj)}`
           );
-
         }
-
       } else {
-
         this.processing.add(request.id);
         this.others.pause();
-
       }
 
       for (const event of this.getEventSequence(type, request)) {
-        this.emit(event, {
+        const msg: Message = {
           type: type,
-          respond: Object.prototype.hasOwnProperty.call(request, 'id'),
+          respond: Object.prototype.hasOwnProperty.call(
+            request,
+            'id'
+          ),
           message: message,
-          request: request
-        });
+          request: request,
+        };
+
+        this.emit(event, msg);
       }
     };
 
     responses.on('data', handler);
     others.on('data', handler);
-
   }
 
   /** Mapping from message types to message groups */
   private path = {
-    'result': ['message', 'response.', 'result.'],
-    'failure': ['message', 'response.', 'failure.'],
-    'request': ['message', 'request.'],
-    'malformed': ['malformed.'],
+    result: ['message', 'response.', 'result.'],
+    failure: ['message', 'response.', 'failure.'],
+    request: ['message', 'request.'],
+    malformed: ['malformed.'],
   };
 
   /**
@@ -193,7 +194,7 @@ export class Channel extends EventEmitter {
    * to requests for the `example` method would be reported as all of
    * `result.example`, `response.example`, `response`, and `message`
    * in that order. This method maps a type name to such a sequence.
-   * 
+   *
    * @param type - Message type
    * @param request - Related request to get the method name from
    * @returns The expanded list of event names.
@@ -202,9 +203,7 @@ export class Channel extends EventEmitter {
     type: rpc.JsonrpcMessageType,
     request?: any
   ): string[] {
-
     return this.path[type].reduce((acc: string[], event) => {
-
       const match = event.match(/^(.*?)(\.)?$/s);
 
       if (!match) {
@@ -220,38 +219,32 @@ export class Channel extends EventEmitter {
       }
 
       return acc.concat(more);
-
     }, []);
-
   }
 
   protected next_id: number = 1;
 
   /**
    * Send a notification message.
-   * 
+   *
    * @param method Name of the notification.
    * @param params Parameters of the notification.
    * @returns Promise that resolves when the message was sent.
    */
   public sendNotification<T extends api.Definition>(
-    method: { new(): T },
-    params: rpc.JsonrpcParams,
+    method: { new (): T },
+    params: api.Params<T>
   ): Promise<any> {
-
-    const created = new method;
-
     return this.sendMessage({
       jsonrpc: '2.0',
       params: params,
-      method: created.method,
+      method: api.methodname(method),
     });
-    
   }
 
   /**
    * Call a remote procedure.
-   * 
+   *
    * @param method Name of the requested procedure.
    * @param params Parameters for the procedure.
    * @param resultCb Callback for successful response.
@@ -259,23 +252,19 @@ export class Channel extends EventEmitter {
    * @returns Promise that resolves when the request was sent.
    */
   public sendRequest<T extends api.Definition>(
-    method: { new(): T },
+    method: { new (): T },
     params: rpc.JsonrpcParams,
     resultCb: (result: rpc.JsonrpcResult) => void,
-    errorCb: (error: rpc.JsonrpcError) => void,
+    errorCb: (error: rpc.JsonrpcError) => void
   ): Promise<rpc.JsonrpcRequest> {
-
-    const created = new method;
-
     const request: rpc.JsonrpcRequest = {
       jsonrpc: '2.0',
       id: this.next_id++,
-      method: created.method,
+      method: api.methodname(method),
       params: params,
     };
 
-    return this.sendMessage(request).then(sent => {
-
+    return this.sendMessage(request).then((sent) => {
       this.awaiting.set(request.id, {
         request: request,
         resolve: resultCb,
@@ -283,35 +272,31 @@ export class Channel extends EventEmitter {
       });
 
       return sent;
-
     });
-
   }
 
   /**
-   * Convenience method to call a remote procedure that returns a 
-   * Promise for the result and rejects with an error response if 
+   * Convenience method to call a remote procedure that returns a
+   * Promise for the result and rejects with an error response if
    * any. Uses [[Channel.sendRequest]] internally.
-   * 
+   *
    * @param method Meta class of the requested procedure.
    * @param params Parameters for the procedure.
    * @returns Promise that resolves with the response and rejects
    *          with error response
    */
   public async requestResult<T extends api.Definition>(
-    method: new() => T,
+    method: new () => T,
     params: api.Params<T>
   ): api.Promised<T> {
-
     return new Promise((resolve, reject) => {
       this.sendRequest(method, params, resolve, reject);
     });
-
   }
 
   /**
    * Respond to the given request with an error.
-   * 
+   *
    * @param request The request that is being answered.
    * @param code JSON-RPC 2.0 error code.
    * @param message Short human-readable description of the error.
@@ -324,7 +309,6 @@ export class Channel extends EventEmitter {
     message: string,
     data?: any
   ): Promise<any> {
-
     this.processing.delete(request.id);
 
     if (this.processing.size === 0) {
@@ -337,15 +321,14 @@ export class Channel extends EventEmitter {
       error: {
         code: code,
         message: message,
-        data: data
-      }
+        data: data,
+      },
     });
-
   }
 
   /**
    * Respond to the given request with a result.
-   * 
+   *
    * @param request The request that is being answered.
    * @param result Result data.
    * @returns Promise that resolves when the message was sent.
@@ -354,7 +337,6 @@ export class Channel extends EventEmitter {
     request: rpc.JsonrpcRequest,
     result: any
   ): Promise<any> {
-
     this.processing.delete(request.id);
 
     if (this.processing.size === 0) {
@@ -364,32 +346,69 @@ export class Channel extends EventEmitter {
     return this.sendMessage({
       jsonrpc: '2.0',
       id: request.id,
-      result: result
+      result: result,
     });
-
   }
 
   /**
    * Write a message to the channel.
-   * 
+   *
    * @param message The message to send.
    * @returns Promise that resolves when the message was sent.
    */
-  protected sendMessage(
-    message: rpc.JsonrpcMessage
-  ): Promise<any> {
-
+  protected sendMessage(message: rpc.JsonrpcMessage): Promise<any> {
     return new Promise((resolve, reject) => {
-      this.pipedWrite.write(message, 'utf-8', error => {
+      this.pipedWrite.write(message, 'utf-8', (error) => {
         if (error) {
           reject(error);
         } else {
           resolve(message);
         }
       });
-
     });
-
   }
-  
+
+  /**
+   * Typed shorthand for `.on(...)` for incoming result events for
+   * the given method.
+   *
+   * @param method Meta class of the procedure.
+   * @param listener Event listener
+   *
+   * @returns Wrapper function registered as listener
+   */
+  public onResult<T extends api.Definition>(
+    method: new () => T,
+    listener: (result: api.Result<T>, request: api.Request<T>) => void
+  ): (msg: Message) => void {
+    const wrapper = (msg) => {
+      listener.call(this, msg.message.result, msg.request);
+    };
+
+    this.on(`result.${api.methodname(method)}`, wrapper);
+
+    return wrapper;
+  }
+
+  /**
+   * Typed shorthand for `.on(...)` for incoming failure events for
+   * the given method.
+   *
+   * @param method Meta class of the procedure.
+   * @param listener Event listener
+   *
+   * @returns Wrapper function registered as listener
+   */
+  public onFailure<T extends api.Definition>(
+    method: new () => T,
+    listener: (result: api.Result<T>, request: api.Request<T>) => void
+  ): (msg: Message) => void {
+    const wrapper = (msg) => {
+      listener.call(this, msg.message.result, msg.request);
+    };
+
+    this.on(`failure.${api.methodname(method)}`, wrapper);
+
+    return wrapper;
+  }
 }

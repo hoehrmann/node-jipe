@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
-import { Channel, JsonrpcStdErrors } from './public';
+import { Channel, JsonrpcStdErrors, api } from './public';
 import commandLineArgs = require('command-line-args');
 import { spawn, ChildProcess } from 'child_process';
 import { stackBy } from './stackBy';
+import split2 = require('split2');
+import through2 = require('through2');
+import * as os from 'os';
 
 class Child {
-  process: ChildProcess;
+  process: ChildProcess | NodeJS.Process;
   channel: Channel;
   startRequest: Promise<any>;
 
@@ -15,163 +18,173 @@ class Child {
     this.channel = channel;
     this.startRequest = startRequest;
   }
-
 }
 
+process;
 class Mediator {
+  private spawnAndConnect(exec, args): [ChildProcess, Channel] {
+    const child = spawn(exec, args, {
+      env: process.env,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    if (child.stdout && child.stdin && child.stderr) {
+      const channel = new Channel(child.stdout, child.stdin);
+      return [child, channel];
+    } else {
+      throw 'Child lacks stdio';
+    }
+  }
 
   public start(argv: string[]) {
+    // TODO: make jipe jipe
+    const lhsChannel = new Channel(process.stdin, process.stdout);
 
     const sep = '--';
 
-    const stacks = Array.from(stackBy(argv, x => x === sep)).filter(
-      x => x.length !== 1 || x[0] !== sep
+    const stacks = Array.from(stackBy(argv, (x) => x === sep)).filter(
+      (x) => x.length !== 1 || x[0] !== sep
     );
 
     const childArgs = stacks.slice(1);
 
     const children = childArgs.map((call, ix) => {
-      const [ exec, ...args ] = call;
-      const child = spawn(
-        exec,
-        args,
-        {
-          env: process.env,
-          shell: false,
-          stdio: ['pipe', 'pipe', 'inherit'],
-        }
-      );
+      const [exec, ...args] = call;
+      const child = spawn(exec, args, {
+        env: process.env,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
 
       let channel: Channel;
 
-      if (child.stdout && child.stdin) {
-        channel = new Channel(child.stdout, child.stdin, {
-          foo: true,
-        });
+      // FIXME: comment
+      const prefix =
+        `#${ix} ${exec} ${args.join(' ')}`.replace(
+          /^(.{0,8})(.*?)(.{0,8})$/,
+          (...x) => (x[2].length ? `${x[1]}...${x[3]}` : x[0])
+        ) + ': ';
+
+      if (child.stdout && child.stdin && child.stderr) {
+        channel = new Channel(child.stdout, child.stdin);
+
+        const prefixer = function(chunk, encoding, cb) {
+          this.push(prefix + chunk + os.EOL);
+          cb();
+        };
+
+        child.stderr
+          .pipe(split2())
+          .pipe(through2(prefixer))
+          .pipe(process.stderr);
       } else {
         throw `Child ${ix} (${exec} ${args}) has no stdio`;
       }
 
       const startRequest = new Promise((resolve, reject) => {
-        channel.on('request.jipe.start', msg => {
+        channel.on('request.jipe.start', (msg) => {
           resolve(msg.request);
         });
       });
 
       return new Child(process, channel, startRequest);
-
-    });
-
-    children.forEach(child => {
-      child.channel.on('message', (...args) => {
-        // console.error(args);
-      })
     });
 
     const dispatch = new Map<String, Child[]>();
 
-    Promise.all(children.map(child => child.startRequest)).then(all => {
+    const forwarder = async (channel, msg) => {
+      const name = `request.${msg.request.method}`;
+      const handler = dispatch.get(name);
 
-      all.forEach((request, ix) => {
-
-        request.params.implements.forEach(name => {
-          if (/^request\./.test(name)) {
-            if (!dispatch.has(name)) {
-              // First-come, first-served.
-              dispatch.set(name, [children[ix]]);
-            }
-          }
-
-/*
-          if (/^notification\./.test(name)) {
-            // Broadcast
-            const old = dispatch.get(name) || [];
-            dispatch.set(name, [...old, children[ix]]);
-          }
-*/
-
-        });
-
-      });
-
-      children.forEach((child, ix) => {
-
-/*
-        child.channel.on('notification', msg => {
-          const list = dispatch.get(msg.request.method) || [];
-          list.forEach(subscriber => {
-            subscriber.channel.sendNotification(
-              msg.request.method,
-              msg.request.params
-            );
-          })
-        });
-*/
-
-        child.channel.on('request', async msg => {
-
-          const name = `request.${msg.request.method}`;
-          const handler = dispatch.get(name);
-
-          if (handler) {
-
-            const forwarded = await handler[0].channel.sendRequest(
-              msg.request.method,
-              msg.request.params,
-              result => {
-                if (msg.respond) {
-                  child.channel.sendResult(msg.request, result);
-                }
-              },
-              error => {
-                if (msg.respond) {
-                  child.channel.sendError(
-                    msg.request,
-                    error.code,
-                    error.message,
-                    error.data
-                  );
-                }
-              }
-            );
-
-          } else {
-
+      if (handler && msg.respond) {
+        const forwarded = await handler[0].channel.sendRequest(
+          class implements api.Definition {
+            method = msg.request.method;
+            params: any;
+            result: any;
+          },
+          msg.request.params,
+          (result) => {
             if (msg.respond) {
-              child.channel.sendError(
+              channel.sendResult(msg.request, result);
+            }
+          },
+          (error) => {
+            if (msg.respond) {
+              channel.sendError(
                 msg.request,
-                -32601,
-                `Method ${msg.request.method} not found`,
+                error.code,
+                error.message,
+                error.data
               );
             }
-
           }
+        );
+      } else if (handler) {
+        const forwarded = await handler[0].channel.sendNotification(
+          class implements api.Definition {
+            method = msg.request.method;
+            params: any;
+            result: any;
+          },
+          msg.request.params
+        );
+      } else {
+        if (msg.respond) {
+          channel.sendError(
+            msg.request,
+            -32601,
+            `Method ${msg.request.method} not found`
+          );
+        }
+      }
+    };
 
+    Promise.all(children.map((child) => child.startRequest)).then(
+      (all) => {
+        all.forEach((request, ix) => {
+          request.params.implements.forEach((name) => {
+            if (/^request\./.test(name)) {
+              if (!dispatch.has(name)) {
+                // First-come, first-served.
+                dispatch.set(name, [children[ix]]);
+              }
+            }
+          });
         });
 
-        child.channel.sendResult(all[ix], {
-          implements: [...dispatch.keys()].filter(
-            x => /^request\./.test(x.toString())
-          )
+        children.forEach((child, ix) => {
+          child.channel.on('request', (msg) => {
+            forwarder(child.channel, msg);
+          });
+
+          child.channel.sendResult(all[ix], {
+            implements: [...dispatch.keys()].filter((x) =>
+              /^request\./.test(x.toString())
+            ),
+          });
         });
-      });
 
-    });
-
+        // TODO: make jipe jipe
+        // lhsChannel.on('request', (msg) => {
+        //   forwarder(lhsChannel, msg);
+        // });
+      }
+    );
   }
-
 }
 
 async function main() {
-
   const options = commandLineArgs(
     [
       {
-        name: 'help', type: Boolean,
+        name: 'help',
+        type: Boolean,
       },
     ],
     {
-      stopAtFirstUnknown: true
+      stopAtFirstUnknown: true,
     }
   );
 
@@ -265,7 +278,6 @@ async function main() {
 
   const mediator = new Mediator();
   mediator.start(process.argv);
-
 }
 
 main();
