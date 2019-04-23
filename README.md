@@ -14,7 +14,7 @@ process that announced they can handle such requests.
 ## JSON-RPC 2.0 library
 
 ```typescript
-import { Channel, api } from 'node-jipe';
+import { Channel, api, jipe } from 'node-jipe';
 
 /**
  * Type class for JSON-RPC 2.0 request `ping`.
@@ -47,12 +47,18 @@ main();
 
 ```typescript
 
+/**
+ * Feature map mapping method names to api.Definition.
+ */
 class Features {
   ping = ping
 }
 
-class Pingme extends api.Jipe<Features>
-  implements api.Interface<Features> {
+class Pingme
+// provides `start` method that does `jipe.start`
+extends api.Jipe<Features>
+// requires proper implementation of the Features
+implements api.Interface<Features> {
 
   async ping(params: api.Params<ping>): api.Promised<ping> {
     // echo back parameters
