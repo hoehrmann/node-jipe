@@ -7,11 +7,13 @@ import { stackBy } from './stackBy';
 import split2 = require('split2');
 import through2 = require('through2');
 import * as os from 'os';
+import { Message } from './channel';
+import { jipe } from './public';
 
-class Child {
+class Wrapped {
   process: ChildProcess | NodeJS.Process;
   channel: Channel;
-  startRequest: Promise<any>;
+  startRequest: Promise<[Channel, Message]>;
 
   constructor(process, channel, startRequest) {
     this.process = process;
@@ -20,25 +22,8 @@ class Child {
   }
 }
 
-process;
 class Mediator {
-  private spawnAndConnect(exec, args): [ChildProcess, Channel] {
-    const child = spawn(exec, args, {
-      env: process.env,
-      shell: false,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    if (child.stdout && child.stdin && child.stderr) {
-      const channel = new Channel(child.stdout, child.stdin);
-      return [child, channel];
-    } else {
-      throw 'Child lacks stdio';
-    }
-  }
-
   public start(argv: string[]) {
-    // TODO: make jipe jipe
     const lhsChannel = new Channel(process.stdin, process.stdout);
 
     const sep = '--';
@@ -59,7 +44,10 @@ class Mediator {
 
       let channel: Channel;
 
-      // FIXME: comment
+      // STDERR is piped through a prefixer that prefixes lines with
+      // some abbreviated information to identify which channel the
+      // text is coming from, otherwise it can be hard to debug some
+      // kinds of errors.
       const prefix =
         `#${ix} ${exec} ${args.join(' ')}`.replace(
           /^(.{0,8})(.*?)(.{0,8})$/,
@@ -84,16 +72,16 @@ class Mediator {
 
       const startRequest = new Promise((resolve, reject) => {
         channel.on('request.jipe.start', (msg) => {
-          resolve(msg.request);
+          resolve([channel, msg]);
         });
       });
 
-      return new Child(process, channel, startRequest);
+      return new Wrapped(process, channel, startRequest);
     });
 
-    const dispatch = new Map<String, Child[]>();
+    const dispatch = new Map<string, Wrapped[]>();
 
-    const forwarder = async (channel, msg) => {
+    const forwarder = async (channel: Channel, msg: Message) => {
       const name = `request.${msg.request.method}`;
       const handler = dispatch.get(name);
 
@@ -143,33 +131,48 @@ class Mediator {
 
     Promise.all(children.map((child) => child.startRequest)).then(
       (all) => {
-        all.forEach((request, ix) => {
-          request.params.implements.forEach((name) => {
-            if (/^request\./.test(name)) {
-              if (!dispatch.has(name)) {
-                // First-come, first-served.
-                dispatch.set(name, [children[ix]]);
+        // Collect `implements` data
+        all.forEach(([channel, msg], ix) => {
+          if (msg.request.params) {
+            msg.request.params.implements.forEach((name) => {
+              if (/^request\./.test(name)) {
+                if (!dispatch.has(name)) {
+                  // First-come, first-served.
+                  dispatch.set(name, [children[ix]]);
+                }
               }
-            }
-          });
+            });
+          }
         });
 
+        // Setup forwarders
         children.forEach((child, ix) => {
           child.channel.on('request', (msg) => {
             forwarder(child.channel, msg);
           });
-
-          child.channel.sendResult(all[ix], {
-            implements: [...dispatch.keys()].filter((x) =>
-              /^request\./.test(x.toString())
-            ),
-          });
         });
 
-        // TODO: make jipe jipe
-        // lhsChannel.on('request', (msg) => {
-        //   forwarder(lhsChannel, msg);
-        // });
+        lhsChannel.on('request', (msg) => {
+          forwarder(lhsChannel, msg);
+        });
+
+        const implementsList = [...dispatch.keys()].filter((x) =>
+          /^request\./.test(x.toString())
+        );
+
+        // Broadcast collected `implements` data
+        children.forEach((child, ix) => {
+          if (all[ix][1].respond) {
+            child.channel.sendResult(all[ix][1].request, {
+              implements: implementsList,
+            });
+          }
+        });
+
+        // Announce and ignore response
+        lhsChannel.sendNotification(jipe.start, {
+          implements: implementsList,
+        });
       }
     );
   }
@@ -205,7 +208,7 @@ async function main() {
   set to an array of method names prefixed by \`notification.\` or
   \`request.\`. When all children have made such a request, \`jipe\`
   will send a result to all children with \`params.implements\` set
-  to the union of all values it received, allowing children to 
+  to the union of all values it received, allowing children to
   complain when methods they need are missing.
 
   EXAMPLE:

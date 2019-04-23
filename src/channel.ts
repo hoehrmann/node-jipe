@@ -48,9 +48,7 @@ function getMessageType(message: any): rpc.JsonrpcMessageType {
   return 'malformed';
 }
 
-export interface ChannelOptions {
-  foo?: Boolean;
-}
+export interface ChannelOptions {}
 
 export interface Message {
   type: rpc.JsonrpcMessageType;

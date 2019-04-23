@@ -1,4 +1,4 @@
-# node-jipe - stdio ndjson jsonrpc process composition
+# node-jipe - Process composition via JSON-RPC pipes
 
 When you enter `cat file | sort | uniq -c | sort -rn | head -n10` in
 your terminal, your shell will spawn the listed processes; they talk
@@ -14,27 +14,60 @@ process that announced they can handle such requests.
 ## JSON-RPC 2.0 library
 
 ```typescript
-import { Channel } from 'node-jipe';
+import { Channel, api } from 'node-jipe';
+
+/**
+ * Type class for JSON-RPC 2.0 request `ping`.
+ */
+export class ping implements api.Definition {
+  method = 'ping';
+  params: any;
+  result: any;
+}
 
 async function main() {
 
   const channel = new Channel(process.stdin, process.stdout);
 
-  const available = await channel.requestResult('jipe.start', {
-    implements: [
-      'request.ping'
-    ]
+  // manually do `jipe.start`
+  const available = await channel.requestResult(jipe.start, {
+    implements: []
   });
 
-  channel.on('request.ping', msg => {
-    channel.sendResult(msg.request, {
-      pong: msg.request.params
-    });
+  // Could check here that available.implements has `request.ping`
+
+  const result = await channel.requestResult(ping, {
+    data: 123
   });
 
 }
 
 main();
+```
+
+```typescript
+
+class Features {
+  ping = ping
+}
+
+class Pingme extends api.Jipe<Features>
+  implements api.Interface<Features> {
+
+  async ping(params: api.Params<ping>): api.Promised<ping> {
+    // echo back parameters
+    return params;
+  }
+
+}
+
+async function main() {
+  const us = new Pingme();
+
+  // This automatically does `jipe.start` announcing the Features
+  await us.start(new Features(), process.stdin, process.stdout);
+}
+
 ```
 
 Documentation of the library is available via something like:
