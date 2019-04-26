@@ -2,6 +2,7 @@ import { Channel } from './public';
 import { Writable, Readable } from 'stream';
 import * as jipe from './jipeProtocol';
 import { JsonrpcRequest } from './jsonrpc';
+import { ChannelOptions } from './channel';
 
 /**
  * Interface for type classes for individual JSON-RPC 2.0 request
@@ -86,13 +87,15 @@ export class Jipe<T extends Features> {
    * @param imp Feature map of requests implemented by this class.
    * @param stdin Readable for incoming messages.
    * @param stdout Writable for outgoing messages.
+   * @param options Options for the channel.
    */
   public async start(
     imp: T,
     stdin: Readable,
-    stdout: Writable
+    stdout: Writable,
+    options?: ChannelOptions
   ): Promise<any> {
-    this.channel = new Channel(stdin, stdout);
+    this.channel = new Channel(stdin, stdout, options);
 
     const dispatch = new Map<string, Function<Definition>>();
 

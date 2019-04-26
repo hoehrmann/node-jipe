@@ -22,9 +22,21 @@ class Wrapped {
   }
 }
 
+/**
+ * The Mediator spawns child processes, establishes JSON-RPC channels
+ * with them, receives their requests, and routes them back to the
+ * child that announced it can satisfy such requests, if any.
+ *
+ * When stdin is not a tty, it also takes requests via the processes
+ * own stdin, but does not consider whatever connects on stdin to
+ * offer any services. Not entirely sure about this design yet.
+ */
 class Mediator {
   public start(argv: string[]) {
-    const lhsChannel = new Channel(process.stdin, process.stdout);
+    const lhsChannel =
+      process.stdin && !process.stdin.isTTY
+        ? new Channel(process.stdin, process.stdout)
+        : new Channel(through2(), through2());
 
     const sep = '--';
 
@@ -50,12 +62,14 @@ class Mediator {
       // kinds of errors.
       const prefix =
         `#${ix} ${exec} ${args.join(' ')}`.replace(
-          /^(.{0,8})(.*?)(.{0,8})$/,
+          /^(.{0,16})(.*?)(.{0,16})$/,
           (...x) => (x[2].length ? `${x[1]}...${x[3]}` : x[0])
         ) + ': ';
 
       if (child.stdout && child.stdin && child.stderr) {
-        channel = new Channel(child.stdout, child.stdin);
+        channel = new Channel(child.stdout, child.stdin, {
+          concurrency: 16,
+        });
 
         const prefixer = function(chunk, encoding, cb) {
           this.push(prefix + chunk + os.EOL);

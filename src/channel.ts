@@ -48,7 +48,9 @@ function getMessageType(message: any): rpc.JsonrpcMessageType {
   return 'malformed';
 }
 
-export interface ChannelOptions {}
+export interface ChannelOptions {
+  concurrency: number;
+}
 
 export interface Message {
   type: rpc.JsonrpcMessageType;
@@ -68,7 +70,7 @@ export class Channel extends EventEmitter {
   protected others: Transform;
 
   protected awaiting = new Map<number, RequestAndCallback>();
-  protected processing = new Set<number>();
+  protected processing = new Map<number, RequestAndCallback>();
 
   /** Configuration */
   protected options: ChannelOptions;
@@ -83,11 +85,15 @@ export class Channel extends EventEmitter {
   constructor(
     read: Readable,
     write: Writable,
-    options: ChannelOptions = {}
+    options: ChannelOptions = {
+      concurrency: 1,
+    }
   ) {
     super();
 
-    this.options = options;
+    this.options = {
+      ...options,
+    };
 
     const dissect = (data: string) => {
       const parsed = JSON.parse(data);
@@ -105,9 +111,11 @@ export class Channel extends EventEmitter {
 
     this.pipedWrite.pipe(write);
 
-    const dissected = read.pipe(split2(dissect));
+    const dissected = read.pipe(split2('\n', dissect));
     const responses = through2({ objectMode: true });
-    const others = through2({ objectMode: true });
+    const others = through2({
+      objectMode: true,
+    });
 
     this.others = others;
 
@@ -155,8 +163,25 @@ export class Channel extends EventEmitter {
           );
         }
       } else {
-        this.processing.add(request.id);
-        this.others.pause();
+        this.processing.set(request.id, {
+          request: request,
+          resolve: (value) => {
+            this.processing.delete(request.id);
+            if (this.processing.size < this.options.concurrency) {
+              this.others.resume();
+            }
+          },
+          reject: (error) => {
+            this.processing.delete(request.id);
+            if (this.processing.size < this.options.concurrency) {
+              this.others.resume();
+            }
+          },
+        });
+
+        if (this.processing.size >= this.options.concurrency) {
+          this.others.pause();
+        }
       }
 
       for (const event of this.getEventSequence(type, request)) {
@@ -307,20 +332,23 @@ export class Channel extends EventEmitter {
     message: string,
     data?: any
   ): Promise<any> {
-    this.processing.delete(request.id);
+    const error = {
+      code: code,
+      message: message,
+      data: data,
+    };
 
-    if (this.processing.size === 0) {
-      this.others.resume();
+    const rcb = this.processing.get(request.id);
+    if (rcb) {
+      rcb.reject(error);
+    } else {
+      throw 'sendError for unknown request';
     }
 
     return this.sendMessage({
       jsonrpc: '2.0',
       id: request.id,
-      error: {
-        code: code,
-        message: message,
-        data: data,
-      },
+      error,
     });
   }
 
@@ -335,10 +363,11 @@ export class Channel extends EventEmitter {
     request: rpc.JsonrpcRequest,
     result: any
   ): Promise<any> {
-    this.processing.delete(request.id);
-
-    if (this.processing.size === 0) {
-      this.others.resume();
+    const rcb = this.processing.get(request.id);
+    if (rcb) {
+      rcb.resolve(result);
+    } else {
+      throw 'sendResult for unknown request';
     }
 
     return this.sendMessage({

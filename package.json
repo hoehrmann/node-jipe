@@ -1,6 +1,6 @@
 {
   "name": "node-jipe",
-  "version": "1.0.76",
+  "version": "1.1.5",
   "description": "Process composition via JSON-RPC pipes",
   "main": "out/public.js",
   "types": "out/public.d.ts",
